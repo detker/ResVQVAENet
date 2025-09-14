@@ -61,7 +61,7 @@ def add_arguments(parser):
                         type=float,
                         default=0.0005,
                         help='Learning rate')
-    parser.add_argument('--variational',
+    parser.add_argument('--_variational',
                         action=argparse.BooleanOptionalAction,
                         help='Enable live plotting')
 
@@ -124,7 +124,7 @@ def train(model, variational, trainloader, testloader, config, device):
                             enc, mu, lnvar, sigma, reconstruction = model(data)
                         loss = VAELoss(data, reconstruction, mu, lnvar,
                                        alpha=config.kl_divergence_weight,
-                                       beta=1-config.kl_divergence_weight)
+                                       beta=1)
                     else:
                         with torch.no_grad():
                             enc, dec = model(data)
@@ -175,18 +175,19 @@ def main():
 
     config = Config(**{k:v for k,v in args.__dict__.items() if not k.startswith('_')})
     trainloader, testloader = setup_data_pipeline(config)
-    model = ConvVAE(config) if config._variational else ConvAE(config)
-    model, log, latent_space_representation = train(models=model,
-                                                     variational=config._variational,
+    model = ConvVAE(config) if args._variational else ConvAE(config)
+    model = model.to(device)
+    model, log, latent_space_representation = train(model=model,
+                                                     variational=args._variational,
                                                      trainloader=trainloader,
                                                      testloader=testloader,
                                                      config=config,
                                                      device=device)
 
-    os.makedirs(config._model_weights_dir, exist_ok=True)
+    os.makedirs(args._model_weights_dir, exist_ok=True)
     state_dict = model.state_dict()
     save_file(state_dict,
-              os.path.join(config._model_weights_dir, 'vae' if config._variational else 'ae')+'.safetensors')
+              os.path.join(args._model_weights_dir, 'vae' if args._variational else 'ae')+'.safetensors')
 
 if __name__ == '__main__':
     main()
