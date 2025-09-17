@@ -1,168 +1,207 @@
 import os
-import argparse
-
+import shutil
 from tqdm import tqdm
+import argparse
 
 import numpy as np
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torchvision import transforms
-from torchvision.datasets import MNIST
-from safetensors.torch import save_file
 
-from models import ConvAE, ConvVAE
-from utils import VAELoss, Plotter, Config
+from safetensors.torch import load_file, save_file
+from accelerate import Accelerator
+from transformers import get_cosine_schedule_with_warmup
+from torchvision.models import vgg16
+
+from utils import ImageNetDataset, transforms_training, transforms_testing
+from model import ConvResidualVQVAE_ResNet50Backbone
+from lora import LoRAConfig, LoRAModel
+
+import warnings
+warnings.filterwarnings('ignore')
 
 def add_arguments(parser):
-    parser.add_argument('--_model_weights_dir',
-                        type=str,
+    parser.add_argument("--experiment_name",
+                        help="Name of Experiment being Launched",
                         required=True,
-                        help='Directory to save the model')
-    parser.add_argument('--dataset',
-                        type=str,
-                        default='MNIST',
-                        help='Dataset name')
-    parser.add_argument('--img_wh',
-                        type=int,
-                        default=32,
-                        help='Image width and height')
-    parser.add_argument('--latent_space_dim',
-                        type=int,
-                        default=4,
-                        help='Dimension of latent space')
-    parser.add_argument('--in_channels',
-                        type=int,
-                        default=1,
-                        help='Number of input channels')
-    parser.add_argument('--batch_size',
-                        type=int,
-                        default=64,
-                        help='Batch size')
-    parser.add_argument('--iterations',
-                        type=int,
-                        default=25000,
-                        help='Number of training iterations')
-    parser.add_argument('--eval_intervals',
-                        type=int,
-                        default=250,
-                        help='Evaluation interval')
-    parser.add_argument('--num_workers',
+                        type=str)
+
+    parser.add_argument("--path_to_data",
+                        help="Path to ImageNet root folder which should contain \train and \validation folders",
+                        required=True,
+                        type=str)
+
+    parser.add_argument("--working_directory",
+                        help="Working Directory where checkpoints and logs are stored, inside a \
+                        folder labeled by the experiment name",
+                        required=True,
+                        type=str)
+
+    parser.add_argument("--checkpoint_dir",
+                        help="Working Directory where checkpoints and logs are stored, inside a \
+                        folder labeled by the experiment name",
+                        required=True,
+                        type=str)
+
+    parser.add_argument("--perceptual_loss_lambda",
+                        help="Weight for perceptual loss",
+                        default=0.0,
+                        type=float)
+
+    parser.add_argument('--use_lora',
+                        type=bool,
+                        action=argparse.BooleanOptionalAction,
+                        help='Use lora')
+
+    parser.add_argument('--lora_rank',
                         type=int,
                         default=8,
-                        help='Number of data loading workers')
-    parser.add_argument('--kl_divergence_weight',
-                        type=float,
-                        default=1.0,
-                        help='Weight for KL divergence loss')
-    parser.add_argument('--lr',
-                        type=float,
-                        default=0.0005,
-                        help='Learning rate')
-    parser.add_argument('--_variational',
+                        help='Rank of the LoRA adaptation matrices.')
+
+    parser.add_argument('--lora_alpha',
+                        type=int,
+                        default=8,
+                        help='Alpha scaling factor for LoRA.')
+
+    parser.add_argument('--lora_use_rslora',
                         action=argparse.BooleanOptionalAction,
-                        help='Enable live plotting')
+                        default=False,
+                        help='Whether to use RS-LoRA.')
 
-    return parser
+    parser.add_argument('--lora_dropout',
+                        type=float,
+                        default=0.1,
+                        help='Dropout rate for LoRA layers.')
 
-def setup_data_pipeline(config):
-    data_folder_prefix = 'data'
-    transform = transforms.Compose([transforms.Resize((config.img_wh, config.img_wh)),
-                                    transforms.ToTensor()])
-    if config.dataset == 'MNIST':
-        train_dataset = MNIST(os.path.join(data_folder_prefix, 'mnist'),
-                              train=True, transform=transform, download=True)
-        test_dataset = MNIST(os.path.join(data_folder_prefix, 'mnist'),
-                             train=False, transform=transform, download=True)
-    else:
-        raise Exception('Wrong dataset specified')
+    parser.add_argument('--lora_bias',
+                        type=str,
+                        default='none',
+                        choices=['none', 'lora_only', 'all'],
+                        help='Bias configuration for LoRA.')
 
-    trainloader = DataLoader(train_dataset, batch_size=config.batch_size,
-                             shuffle=True, num_workers=config.num_workers)
-    testloader = DataLoader(test_dataset, batch_size=config.batch_size,
-                            shuffle=False, num_workers=config.num_workers)
+    parser.add_argument('--lora_target_modules',
+                        type=lambda x: [s.strip() for s in x.split(',')],
+                        help='Comma-separated list of target modules for LoRA.')
 
-    return trainloader, testloader
+    parser.add_argument('--lora_exclude_modules',
+                        type=lambda x: [s.strip() for s in x.split(',')],
+                        help='Comma-separated list of modules to exclude from LoRA.')
 
+    parser.add_argument("--epochs",
+                        help="Number of Epochs to Train",
+                        default=300,
+                        type=int)
 
-def train(model, variational, trainloader, testloader, config, device):
-    optimizer = optim.Adam(model.parameters(), lr=config.lr)
+    parser.add_argument("--warmup_epochs",
+                        help="Number of warmup Epochs",
+                        default=30,
+                        type=int)
 
-    train_losses, test_losses = [], []
-    train_loss, test_loss = [], []
-    enc_val_latents = []
-    all_enc_val_latents = []
-    steps_done = 0
+    parser.add_argument("--save_checkpoint_interval",
+                        help="After how many epochs to save model checkpoints",
+                        default=1,
+                        type=int)
 
-    train = True
-    pbar = tqdm(range(0, config.iterations))
+    parser.add_argument("--per_gpu_batch_size",
+                        help="Effective batch size. If split_batches is false, batch size is \
+                            multiplied by number of GPUs utilized ",
+                        default=256,
+                        type=int)
 
-    while train:
-        for data, _ in trainloader:
-            data = data.to(device)
-            if variational:
-                z, mu, lnvar, sigma, reconstruction = model(data)
-                loss = VAELoss(data, reconstruction, mu, lnvar, alpha=1, beta=1)
-            else:
-                enc, dec = model(data)
-                loss = torch.mean((dec-data) ** 2)
+    parser.add_argument("--gradient_accumulation_steps",
+                        help="Number of Gradient Accumulation Steps for Training",
+                        default=1,
+                        type=int)
 
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            train_loss.append(loss.item())
+    parser.add_argument("--learning_rate",
+                        help="Max Learning rate for cosine scheduler",
+                        default=0.003,
+                        type=float)
 
-            if steps_done % config.eval_intervals == 0:
-                model.eval()
+    parser.add_argument("--weight_decay",
+                        help="Weight decay for conv layers",
+                        default=0.1,
+                        type=float)
 
-                for data, labels in testloader:
-                    data = data.to(device)
-                    if variational:
-                        with torch.no_grad():
-                            enc, mu, lnvar, sigma, reconstruction = model(data)
-                        loss = VAELoss(data, reconstruction, mu, lnvar,
-                                       alpha=config.kl_divergence_weight,
-                                       beta=1)
-                    else:
-                        with torch.no_grad():
-                            enc, dec = model(data)
-                        loss = torch.mean((data-dec)**2)
-                    test_loss.append(loss.item())
+    parser.add_argument("--custom_weight_init",
+                        help="Do you want to initialize the model with truncated/kaiming normal layer?",
+                        default=False,
+                        action=argparse.BooleanOptionalAction)
 
-                    enc, labels = enc.cpu().flatten(1), labels.unsqueeze(1)
-                    enc_val_latents.append(torch.cat([enc, labels], axis=-1))
+    parser.add_argument("--max_grad_norm",
+                        help="Maximum norm for gradient clipping",
+                        default=1.0,
+                        type=float)
 
-                mean_train_loss = np.mean(train_loss)
-                mean_test_loss = np.mean(test_loss)
+    parser.add_argument("--img_size",
+                        help="Width and Height of Images passed to model",
+                        default=224,
+                        type=int)
 
-                print(
-                    f'Iteration: {steps_done}/{config.iterations}: Train Loss: {mean_train_loss:.4f} | Test Loss: {mean_test_loss:.4f}')
+    parser.add_argument('--in_channels',
+                        help='Number of channels in image',
+                        default=3,
+                        type=int)
 
-                train_losses.append(mean_train_loss)
-                test_losses.append(mean_test_loss)
+    parser.add_argument("--num_workers",
+                        help="Number of workers for DataLoader",
+                        default=32,
+                        type=int)
 
-                train_loss, test_los = [], []
+    parser.add_argument('--adam_beta1',
+                        type=float,
+                        default=0.9,
+                        help='Beta1 parameter for Adam optimizer.')
 
-                all_enc_val_latents.append(torch.concatenate(enc_val_latents).detach())
-                enc_val_latents = []
+    parser.add_argument('--adam_beta2',
+                        type=float,
+                        default=0.999,
+                        help='Beta2 parameter for Adam optimizer.')
 
-                model.train()
+    parser.add_argument('--adam_epsilon',
+                        type=float,
+                        default=1e-8,
+                        help='Epsilon parameter for Adam optimizer.')
 
-            steps_done += 1
-            pbar.update(1)
-            if steps_done >= config.iterations:
-                train = False
-                break
+    parser.add_argument('--commitment_loss_beta',
+                        type=float,
+                        default=0.25,
+                        help='Weight for commitment loss')
 
-    all_enc_val_latents = [np.array(enc_eval) for enc_eval in all_enc_val_latents]
-    log = {
-        'train_loss': train_losses,
-        'test_loss': test_losses
-    }
+    parser.add_argument('--ema_decay',
+                        type=float,
+                        default=0.999,
+                        help='EMA decay value')
 
-    return model, log, all_enc_val_latents
+    parser.add_argument("--log_wandb",
+                        action=argparse.BooleanOptionalAction,
+                        default=False)
+
+    parser.add_argument("--resume_from_checkpoint",
+                        help="Checkpoint folder for model to resume training from, inside the experiment/checkpoints folder",
+                        default=None,
+                        type=str)
+
+    parser.add_argument('--base_weights_no_lora',
+                        help='Pretrained base model weights for lora finetuning',
+                        default=None,
+                        type=str)
+
+    parser.add_argument('--max_no_of_checkpoints',
+                        type=int,
+                        default=10,
+                        help='Max number of latest checkpoints to store on disk.')
+
+    parser.add_argument('--merged_weights_from_lora',
+                        type=str,
+                        default=None,
+                        help='Weights path for lora finetuned model')
+
+    parser.add_argument('--use_perceptual_loss',
+                        type=bool,
+                        action=argparse.BooleanOptionalAction,
+                        help='Use additional Perceptual Loss (LoRA advised)')
 
 
 def main():
@@ -170,24 +209,226 @@ def main():
     add_arguments(parser)
     args = parser.parse_args()
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f'Device: {device}')
+    # assert args.use_lora == (args.merged_weights_from_lora is not None)
+    # assert not args.use_lora == (args.base_weights_no_lora is not None)
 
-    config = Config(**{k:v for k,v in args.__dict__.items() if not k.startswith('_')})
-    trainloader, testloader = setup_data_pipeline(config)
-    model = ConvVAE(config) if args._variational else ConvAE(config)
-    model = model.to(device)
-    model, log, latent_space_representation = train(model=model,
-                                                     variational=args._variational,
-                                                     trainloader=trainloader,
-                                                     testloader=testloader,
-                                                     config=config,
-                                                     device=device)
+    experiment_path = os.path.join(args.working_directory, args.experiment_name)
+    accelerator = Accelerator(project_dir=experiment_path,
+                              gradient_accumulation_steps=args.gradient_accumulation_steps,
+                              log_with='wandb' if args.log_wandb else None)
 
-    os.makedirs(args._model_weights_dir, exist_ok=True)
-    state_dict = model.state_dict()
-    save_file(state_dict,
-              os.path.join(args._model_weights_dir, 'vae' if args._variational else 'ae')+'.safetensors')
+    print(f'Device: {accelerator.device}')
+
+    if args.log_wandb:
+        experiment_config = {"epochs": args.epochs,
+                             "effective_batch_size": args.per_gpu_batch_size * accelerator.num_processes,
+                             "learning_rate": args.learning_rate,
+                             "warmup_epochs": args.warmup_epochs,
+                             "custom_weight_init": args.custom_weight_init}
+        accelerator.init_trackers(args.experiment_name, config=experiment_config)
+
+    transforms_train = transforms_training(img_wh=args.img_size)
+    transforms_test = transforms_testing(img_wh=args.img_size)
+
+    train_data = ImageNetDataset(os.path.join(args.path_to_data, 'train'),
+                                 transform=transforms_train)
+    test_data = ImageNetDataset(os.path.join(args.path_to_data, 'test'),
+                                transform=transforms_test)
+
+    minibatch_size = args.per_gpu_batch_size // args.gradient_accumulation_steps
+    trainloader = DataLoader(train_data,
+                             batch_size=minibatch_size,
+                             shuffle=True,
+                             num_workers=args.num_workers,
+                             pin_memory=True)
+    testloader = DataLoader(test_data,
+                            batch_size=minibatch_size,
+                            shuffle=False,
+                            num_workers=args.num_workers,
+                            pin_memory=True)
+    accelerator.print('Data Loaded.')
+
+    model = ConvResidualVQVAE_ResNet50Backbone(args.in_channels)
+
+    ema_model = None
+    if args.use_lora:
+        statedict = load_file(os.path.join(experiment_path, args.base_weights_no_lora))
+        with accelerator.main_process_first():
+            model.load_state_dict(statedict)
+        lora_config = LoRAConfig(**{k: v for k, v in args.__dict__.items() if 'lora_' in k})
+        model = LoRAModel(model, config=lora_config)
+    else:
+        if args.custom_weight_init:
+            model.apply(model.init_weights)
+        ema_model = ConvResidualVQVAE_ResNet50Backbone(args.in_channels)
+        with accelerator.main_process_first():
+            ema_model.load_state_dict(model.state_dict())
+            for p in ema_model.parameters():
+                p.requires_grad = False
+        ema_model = ema_model.to(accelerator.device)
+
+    model = model.to(accelerator.device)
+
+    ### perceptual loss ###
+    vgg_model = None
+    if args.use_perceptual_loss:
+        vgg_model = vgg16(pretrained=True).features[:16].eval()
+        for p in vgg_model.parameters():
+            p.requires_grad = False
+        vgg_model = vgg_model.to(accelerator.device)
+
+    def perceptual_loss(x, recon):
+        f_x = vgg_model(x)
+        f_recon = vgg_model(recon)
+        return torch.mean((f_x - f_recon) ** 2)
+
+    def update_ema(ema_model, model, decay=0.999):
+        with torch.no_grad():
+            for p_ema, p in zip(ema_model.parameters(), model.parameters()):
+                p_ema.mul_(decay).add_(p, alpha=1 - decay)
+
+    weight_decay_params = []
+    non_weight_decay_params = []
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            if 'bias' in name:
+                non_weight_decay_params.append(param)
+            elif 'bn' in name:
+                non_weight_decay_params.append(param)
+            elif 'embedding' in name:
+                non_weight_decay_params.append(param)
+            else:
+                weight_decay_params.append(param)
+
+    param_config = [{'params': non_weight_decay_params, 'lr': args.learning_rate, 'weight_decay': 0.0,
+                     'betas': (args.adam_beta1, args.adam_beta2), 'eps': args.adam_epsilon},
+                    {'params': weight_decay_params, 'lr': args.learning_rate, 'weight_decay': args.weight_decay,
+                     'betas': (args.adam_beta1, args.adam_beta2), 'eps': args.adam_epsilon}]
+    optimizer = optim.AdamW(param_config)
+
+    scheduler = get_cosine_schedule_with_warmup(optimizer=optimizer,
+                                                num_warmup_steps=args.warmup_epochs * len(
+                                                    trainloader) // args.gradient_accumulation_steps,
+                                                num_training_steps=args.epochs * len(
+                                                    trainloader) // args.gradient_accumulation_steps)
+
+    model, ema_model, optimizer, scheduler, trainloader, testloader = accelerator.prepare(model,
+                                                                                          ema_model,
+                                                                                          optimizer,
+                                                                                          scheduler,
+                                                                                          trainloader,
+                                                                                          testloader)
+    accelerator.register_for_checkpointing(scheduler)
+
+    accelerator.print('Dependencies loaded.')
+
+    starting_epoch = 0
+    if args.resume_from_checkpoint is not None:
+        path_to_checkpoint = os.path.join(experiment_path, args.checkpoint_dir, args.resume_from_checkpoint)
+        accelerator.load_state(path_to_checkpoint)
+        starting_epoch = int(path_to_checkpoint.split('_')[-1]) + 1
+        accelerator.print('Loaded checkpoint.')
+
+    accelerator.print(f'Starting training from epoch {starting_epoch + 1}...')
+
+    for epoch in range(starting_epoch, args.epochs):
+        train_losses = []
+        test_losses = []
+        accum_train_loss = 0
+
+        pbar = tqdm(range(len(trainloader) // args.gradient_accumulation_steps),
+                    disable=not accelerator.is_main_process)
+
+        model.train()
+        for data, labels in trainloader:
+            data = data.to(accelerator.device)
+
+            with accelerator.accumulate(model):
+                encoded, quantized_encoded, decoded, codebook_loss, commitment_loss = model(data)
+                reconstruction_loss = torch.mean((data - decoded) ** 2)
+                loss = reconstruction_loss + codebook_loss + args.commitment_loss_beta * commitment_loss
+                if vgg_model is not None:
+                    loss = loss + args.perceptual_loss_lambda * perceptual_loss(data, decoded)
+
+                accum_train_loss += (loss.item() / args.gradient_accumulation_steps)
+
+                accelerator.backward(loss)
+
+                if accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_([param for param in model.parameters() if param.requires_grad],
+                                                max_norm=args.max_grad_norm)
+
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                scheduler.step()
+
+                if ema_model is not None:
+                    update_ema(ema_model, model, decay=args.ema_decay)
+
+            if accelerator.sync_gradients:
+                train_losses.append(np.mean(accelerator.gather_for_metrics(accum_train_loss)).item())
+                accum_train_loss = 0
+
+                pbar.update(1)
+        pbar.close()
+
+        model.eval()
+        for data, labels in testloader:
+            data = data.to(accelerator.device)
+            with torch.no_grad():
+                encoded, quantized_encoded, decoded, codebook_loss, commitment_loss = model(data)
+            reconstruction_loss = torch.mean((data - decoded) ** 2)
+            loss = reconstruction_loss + codebook_loss + args.commitment_loss_beta * commitment_loss
+            loss = loss.item()
+
+            test_losses.append(np.mean(accelerator.gather_for_metrics(loss)).item())
+
+        epoch_train_loss = np.mean(train_losses).item()
+        epoch_test_loss = np.mean(test_losses).item()
+
+        accelerator.print(
+            f'Epoch: {epoch} | Training Loss: {epoch_train_loss:.5f} | Testing Loss: {epoch_test_loss:.5f}.')
+
+        if args.log_wandb:
+            accelerator.log({"training_loss": epoch_train_loss,
+                             "testing_loss": epoch_test_loss,
+                             "lr": scheduler.get_last_lr()[0]}, step=epoch)
+
+        if epoch % args.save_checkpoint_interval == 0:
+            checkpoints_path = os.path.join(experiment_path, args.checkpoint_dir)
+            os.makedirs(checkpoints_path, exist_ok=True)
+            listdirs = [file for file in os.listdir(checkpoints_path) if file.startswith('checkpoint')]
+            if len(listdirs) >= args.max_no_of_checkpoints:
+                listdirs_sorted = sorted(listdirs, key=lambda x: int(x.split('_')[-1]))
+                dirs_to_delete = listdirs_sorted[:-args.max_no_of_checkpoints + 1]
+                for directory in dirs_to_delete:
+                    shutil.rmtree(os.path.join(checkpoints_path, directory))
+            save_path = os.path.join(checkpoints_path, f'checkpoint_{epoch}')
+            accelerator.save_state(save_path)
+            accelerator.print('State saved.')
+
+        accelerator.wait_for_everyone()
+        accelerator.print(f'End of epoch {epoch + 1}.')
+
+    accelerator.print('End of training loop. Saving final merged weights.')
+
+    if accelerator.is_main_process:
+        if not args.use_lora:
+            checkpoints_path = os.path.join(experiment_path, args.base_weights_no_lora)
+            os.makedirs(checkpoints_path, exist_ok=True)
+            state_dict = accelerator.unwrap_model(model).state_dict()
+            state_dict_ema = accelerator.unwrap_model(ema_model).state_dict()
+            save_file(state_dict, filename=os.path.join(checkpoints_path, 'base_weights.safetensors'))
+            save_file(state_dict_ema, filename=os.path.join(checkpoints_path, 'base_weights_ema.safetensors'))
+            accelerator.print('Base weights saved.')
+        else:
+            checkpoint_path = os.path.join(experiment_path, args.merged_weights_from_lora)
+            os.makedirs(checkpoint_path, exist_ok=True)
+            accelerator.unwrap_model(model).save_weights(checkpoint_path)
+            accelerator.print('Finetuned weights saved.')
+
+    accelerator.end_training()
+
 
 if __name__ == '__main__':
     main()
