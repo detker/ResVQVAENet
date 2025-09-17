@@ -271,6 +271,17 @@ class ConvResidualVQVAE(nn.Module):
 
         self.decoder = ResDecoder(layer_counts=layer_counts[::-1], out_channels=in_channels)
 
+    def init_weights(self, module):
+        if isinstance(module, nn.Conv2d) or isinstance(module, nn.ConvTranspose2d):
+            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.trunc_normal_(module.weight, mean=0, std=0.02)
+        elif isinstance(module, nn.BatchNorm2d):
+            module.weight.data.fill_(1.0)
+            module.bias.data.zero_()
+
     def enc_forward(self, x):
         # x: (B, in_channels, H, W)
         z = self.encoder(x)
@@ -305,9 +316,9 @@ class ConvResidualVQVAE(nn.Module):
     def dec_forward(self, z):
         # z: (B, latent_dim, H', W')
         batch_size, latent_dim, h, w = z.shape
-        z = z.permute(0, 2, 3, 1).reshape(-1, latent_dim)  # (B*H'*W', latent_dim)
+        z = z.permute(0, 2, 3, 1).contiguous().reshape(-1, latent_dim)  # (B*H'*W', latent_dim)
         quantized_z, codebook_loss, commitment_loss = self.quantize(z)
-        quantized_z = quantized_z.reshape(batch_size, h, w, latent_dim).permute(0, 3, 1, 2)  # (B, latent_dim, H', W')
+        quantized_z = quantized_z.reshape(batch_size, h, w, latent_dim).permute(0, 3, 1, 2).contiguous()  # (B, latent_dim, H', W')
         dec = self.decoder(quantized_z)  # (B, C, H, W)
 
         return dec, quantized_z, codebook_loss, commitment_loss
@@ -319,9 +330,22 @@ class ConvResidualVQVAE(nn.Module):
         # dec: (B, C, H, W); quantized_latent: (B, latent_dim, H', W')
         return latent, quantized_latent, dec, codebook_loss, commitment_loss
 
+def ConvResidualVQVAE_ResNet50Backbone(in_channels=3):
+    return ConvResidualVQVAE(layer_counts=[3,4,6,3], in_channels=in_channels)
+
+def ConvResidualVQVAE_ResNet101Backbone(in_channels=3):
+    return ConvResidualVQVAE(layer_counts=[3,4,23,3], in_channels=in_channels)
+
+def ConvResidualVQVAE_ResNet150Backbone(in_channels=3):
+    return ConvResidualVQVAE(layer_counts=[3,8,36,3], in_channels=in_channels)
 
 if __name__ == '__main__':
     rvq = ConvResidualVQVAE(layer_counts=[3, 4, 6, 3], in_channels=3)
     x = torch.rand(size=(2, 3, 128, 128))
     print([y.shape for y in rvq(x)])
-    # TODO: EMA weights & perceptual loss in training loop
+    print([name for name,p in rvq.named_parameters()])
+
+    params = 0
+    for p in rvq.parameters():
+        params += p.numel()
+    print(params)

@@ -1,54 +1,63 @@
-from dataclasses import dataclass
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
+import os
+import cv2
 
 import torch
+from torch.utils.data import Dataset
+from torchvision.transforms import v2, Compose, InterpolationMode
 
 
-@dataclass
-class Config:
-    dataset: str = 'MNIST'
-    img_wh: int = 32
-    latent_space_dim: int = 4
-    in_channels: int = 1
-    batch_size: int = 64
-    iterations: int = 25000
-    eval_intervals: int = 250
-    num_workers: int = 8
-    kl_divergence_weight: float = 1.0
-    lr: float = 0.0005
+class ImageNetDataset(Dataset):
+    def __init__(self, root, transform=None, extensions=(".jpg", ".jpeg", ".png")):
+        super().__init__()
 
+        self.root = root
+        self.transform = transform
+        self.extensions = extensions
 
-class Plotter:
-    @staticmethod
-    def plot_latent_space_tsne(latent_space_representation):
-        conv_ae_latent_space = latent_space_representation[-1]
+        self.samples = []
+        for class_name in sorted(os.listdir(root)):
+            class_dir = os.path.join(root, class_name)
+            if not os.path.isdir(class_dir):
+                continue
+            for file_name in os.listdir(class_dir):
+                if file_name.lower().endswith(extensions):
+                    self.samples.append((os.path.join(class_dir, file_name), class_name))
 
-        conv_ae_features = conv_ae_latent_space[:, :-1]
-        conv_ae_lbls = conv_ae_latent_space[:, -1:]
-        tsne = TSNE(2, n_jobs=-1)
-        conv_ae_2d_compresses = tsne.fit_transform(X=conv_ae_features)
+    def __len__(self):
+        return len(self.samples)
 
-        conv_ae_encoding = np.hstack((conv_ae_2d_compresses, conv_ae_lbls))
-        conv_ae_encoding = pd.DataFrame(conv_ae_encoding, columns=["x", "y", "class"])
-        conv_ae_encoding = conv_ae_encoding.sort_values(by="class")
-        conv_ae_encoding["class"] = conv_ae_encoding["class"].astype(int).astype(str)
+    def __getitem__(self, idx):
+        path, label = self.samples[idx]
 
-        for grouper, group in conv_ae_encoding.groupby('class'):
-            plt.scatter(x=group['x'], y=group['y'], label=grouper, alpha=0.8, s=5)
+        img = cv2.imread(path, cv2.IMREAD_COLOR)  # BGR
+        if img is None:
+            raise ValueError(f"Could not read image {path}")
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # convert to RGB
 
+        if self.transform is not None:
+            img = self.transform(img)
 
-def VAELoss(x, x_hat, mu, logvar, alpha=1, beta=1):
-    # alpha, beta - KL divergence, MSE weights respectively
-    pixel_diff = (x - x_hat) * (x - x_hat)
-    pixel_diff = pixel_diff.flatten(1)
-    mse = pixel_diff.sum(axis=-1).mean()
+        return img, label
 
-    kl_divergence = (1 + logvar - mu * mu - torch.exp(logvar)).flatten(1)
-    kl_per_sample = -0.5 * kl_divergence.sum(dim=-1)
-    kl_loss = kl_per_sample.mean()
+def transforms_testing(img_wh=224,
+                       resize_wh=256,
+                       interpolation=InterpolationMode.BILINEAR):
+    return Compose([
+        v2.ToPILImage(),
+        v2.Resize((resize_wh, resize_wh), interpolation=interpolation, antialias=True),
+        v2.CenterCrop((img_wh, img_wh)),
+        v2.PILToTensor(),
+        v2.ToDtype(torch.float32, scale=True)
+    ])
 
-    return alpha * kl_loss + beta * mse
+def transforms_training(img_wh=224,
+                        interpolation=InterpolationMode.BILINEAR,
+                        horizontal_flip_prob=0.5):
+    return Compose([
+        v2.ToPILImage(),
+        v2.RandomResizedCrop((img_wh, img_wh), interpolation=interpolation, antialias=True),
+        v2.RandomHorizontalFlip(horizontal_flip_prob) if horizontal_flip_prob > 0 else v2.Identity(),
+        v2.ColorJitter(brightness=0.4, saturation=0.4, contrast=0.4, hue=0.1),
+        v2.PILToTensor(),
+        v2.ToDtype(torch.float32, scale=True)
+    ])
