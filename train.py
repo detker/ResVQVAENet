@@ -350,7 +350,8 @@ def main():
                 if vgg_model is not None:
                     loss = loss + args.perceptual_loss_lambda * perceptual_loss(data, decoded)
 
-                accum_train_loss += (loss.item() / args.gradient_accumulation_steps)
+                accum_train_loss += loss
+                loss = loss / args.gradient_accumulation_steps
 
                 accelerator.backward(loss)
 
@@ -366,7 +367,14 @@ def main():
                     update_ema(ema_model, model, decay=args.ema_decay)
 
             if accelerator.sync_gradients:
-                train_losses.append(np.mean(accelerator.gather_for_metrics(accum_train_loss)).item())
+                print(accum_train_loss)
+                accum_train_loss = accum_train_loss.detach()
+                print(type(accum_train_loss))
+                gathered = accelerator.gather_for_metrics(accum_train_loss)
+                print(gathered)
+                print(type(gathered))
+                gathered = gathered.item()
+                train_losses.append(np.mean(gathered).item())
                 accum_train_loss = 0
 
                 pbar.update(1)
@@ -379,9 +387,12 @@ def main():
                 encoded, quantized_encoded, decoded, codebook_loss, commitment_loss = model(data)
             reconstruction_loss = torch.mean((data - decoded) ** 2)
             loss = reconstruction_loss + codebook_loss + args.commitment_loss_beta * commitment_loss
-            loss = loss.item()
+            # loss = loss.item()
+            loss = loss.detach()
+            gathered = accelerator.gather_for_metrics(loss)
+            gathered = gathered.item()
 
-            test_losses.append(np.mean(accelerator.gather_for_metrics(loss)).item())
+            test_losses.append(np.mean(gathered).item())
 
         epoch_train_loss = np.mean(train_losses).item()
         epoch_test_loss = np.mean(test_losses).item()

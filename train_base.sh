@@ -1,3 +1,7 @@
+#!/bin/bash
+
+export CUDA_VISIBLE_DEVICES=0,0
+
 accelerate launch train.py \
     --experiment_name 'Conv_ResidualVQVAE_ResNet50Backbone' \
     --working_directory "work_dir" \
@@ -29,7 +33,7 @@ accelerate launch train.py \
     --num_workers 8 \
     --base_weights_no_lora 'base_weights' \
     --custom_weight_init \
-    --log_wandb
+#    --log_wandb
 #    --perceptual_loss_lambda 0.1 \
 #    --use_perceptual_loss
 #    --use_lora
