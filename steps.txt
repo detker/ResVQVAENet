@@ -1,0 +1,19 @@
+curl https://rclone.org/install.sh | sudo bash
+rclone config
+put gcloud client_id and secret (on bitwarden) (it mail acc)
+rclone lsd gdrive:
+rclone copy /path/to/file gdrive:/destination_folder --progress
+
+git authenticate ssh
+ssh-keygen -t ed25519 -C "detker@github.com"
+ssh-add ~/.ssh/id_ed25519
+put public key on github
+donwlaod repo
+
+download_data.sh
+
+pip install -r requirements.txt
+
+accelerate config
+wandb config
+
