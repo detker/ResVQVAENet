@@ -1,0 +1,5 @@
+imagenet1k0
+imagenet1k1
+imagenet1k2
+imagenet1k3
+imagenet1kvalid
