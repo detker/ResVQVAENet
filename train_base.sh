@@ -29,7 +29,7 @@ accelerate launch train.py \
     --num_workers 8 \
     --base_weights_no_lora 'base_weights' \
     --custom_weight_init \
-#    --log_wandb \
+    --log_wandb
 #    --perceptual_loss_lambda 0.1 \
 #    --use_perceptual_loss
 #    --use_lora
