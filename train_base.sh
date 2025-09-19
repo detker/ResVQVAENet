@@ -13,8 +13,8 @@ accelerate launch train.py \
     --lora_target_modules 'conv1,conv2,conv3' \
     --lora_exclude_modules 'embedding,upsample,downsample,conv_transpose,conv0' \
     --max_grad_norm 1.0 \
-    --per_gpu_batch_size 64 \
-    --gradient_accumulation_steps 4 \
+    --per_gpu_batch_size 8 \
+    --gradient_accumulation_steps 1 \
     --warmup_epochs 5 \
     --epochs 300 \
     --save_checkpoint_interval 1 \
@@ -31,9 +31,9 @@ accelerate launch train.py \
     --num_workers 8 \
     --base_weights_no_lora 'base_weights' \
     --custom_weight_init \
+#    --resume_from_checkpoint 'checkpoint_0'
 #    --log_wandb
 #    --perceptual_loss_lambda 0.1 \
 #    --use_perceptual_loss
 #    --use_lora
-#    --resume_from_checkpoint 'checkpoint_126'
 #    --merged_weights_from_lora 'lora_merged_weights/reconstruct.safetensors'

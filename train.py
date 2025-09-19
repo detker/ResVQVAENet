@@ -387,11 +387,12 @@ def main():
 
             test_losses.append(torch.mean(gathered).item())
 
+
         epoch_train_loss = np.mean(train_losses).item()
         epoch_test_loss = np.mean(test_losses).item()
 
         accelerator.print(
-            f'Epoch: {epoch} | Training Loss: {epoch_train_loss:.5f} | Testing Loss: {epoch_test_loss:.5f}.')
+            f'Epoch: {epoch+1} | Training Loss: {epoch_train_loss:.5f} | Testing Loss: {epoch_test_loss:.5f}.')
 
         if args.log_wandb:
             accelerator.log({"training_loss": epoch_train_loss,
