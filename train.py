@@ -344,7 +344,7 @@ def main():
             data = data.to(accelerator.device)
 
             with accelerator.accumulate(model):
-                encoded, quantized_encoded, decoded, codebook_loss, commitment_loss = model(data)
+                encoded, quantized_encoded, decoded, codebook_loss, commitment_loss, _, _ = model(data)
                 reconstruction_loss = torch.mean((data - decoded) ** 2)
                 loss = reconstruction_loss + codebook_loss + args.commitment_loss_beta * commitment_loss
                 if vgg_model is not None:
@@ -373,26 +373,51 @@ def main():
                 accum_train_loss = 0
 
                 pbar.update(1)
+                break
         pbar.close()
 
+
+        usage_ratios = []
+        perplexities = []
         model.eval()
+        accelerator.print('eval momo')
+        counter = 0
         for data, labels in testloader:
             data = data.to(accelerator.device)
             with torch.no_grad():
-                encoded, quantized_encoded, decoded, codebook_loss, commitment_loss = model(data)
+                encoded, quantized_encoded, decoded, codebook_loss, commitment_loss, codebooks_usage_ratios, codebooks_perplexities = model(data)
             reconstruction_loss = torch.mean((data - decoded) ** 2)
             loss = reconstruction_loss + codebook_loss + args.commitment_loss_beta * commitment_loss
             loss = loss.detach()
             gathered = accelerator.gather_for_metrics(loss)
-
+            accelerator.print('wessa', gathered)
             test_losses.append(torch.mean(gathered).item())
+
+            codebooks_usage_ratios = codebooks_usage_ratios.detach()
+            codebooks_perplexities = codebooks_perplexities.detach()
+            gathered_codebooks_usage_ratio = accelerator.gather_for_metrics(codebooks_usage_ratios)
+            gathered_codebooks_perplexities = accelerator.gather_for_metrics(codebooks_perplexities)
+            if gathered_codebooks_usage_ratio.ndim == 1:
+                gathered_codebooks_usage_ratio = gathered_codebooks_usage_ratio.unsqueeze(0)
+            print(gathered_codebooks_usage_ratio)
+            if gathered_codebooks_perplexities.ndim == 1:
+                gathered_codebooks_perplexities = gathered_codebooks_perplexities.unsqueeze(0)
+            gathered_codebooks_perplexities = torch.mean(gathered_codebooks_perplexities, dim=0).tolist()
+            gathered_codebooks_usage_ratio = torch.mean(gathered_codebooks_usage_ratio, dim=0).tolist()
+            usage_ratios.append(gathered_codebooks_usage_ratio)
+            perplexities.append(gathered_codebooks_perplexities)
+            counter += 1
+            if counter > 2: break
 
 
         epoch_train_loss = np.mean(train_losses).item()
         epoch_test_loss = np.mean(test_losses).item()
+        epoch_usage_ratio = np.mean(usage_ratios, axis=0).tolist()
+        epoch_perplexity = np.mean(perplexities, axis=0).tolist()
 
         accelerator.print(
             f'Epoch: {epoch+1} | Training Loss: {epoch_train_loss:.5f} | Testing Loss: {epoch_test_loss:.5f}.')
+        accelerator.print(f'Codebooks usage ratio: {epoch_usage_ratio} | Codebooks perplexity: {epoch_perplexity}')
 
         if args.log_wandb:
             accelerator.log({"training_loss": epoch_train_loss,

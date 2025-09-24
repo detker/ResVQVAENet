@@ -14,7 +14,7 @@ accelerate launch train.py \
     --lora_exclude_modules 'embedding,upsample,downsample,conv_transpose,conv0' \
     --max_grad_norm 1.0 \
     --per_gpu_batch_size 8 \
-    --gradient_accumulation_steps 1 \
+    --gradient_accumulation_steps 4 \
     --warmup_epochs 5 \
     --epochs 300 \
     --save_checkpoint_interval 1 \

@@ -288,16 +288,16 @@ class ConvResidualVQVAE(nn.Module):
         return z  # (B, latent_dim, H', W')
 
     def quantize(self, z):
-        l_vecs = []
-        l_indicies = []
         commitment_losses = 0
         codebook_losses = 0
+        codebooks_usage_ratio = []
+        codebooks_perplexities = []
 
         accum_quantized_latent = torch.zeros_like(z, device=z.device)
 
         # z: (B*H'*W', latent_dim)
         for idx, quantizer in enumerate(self.vqs):
-            codes, indicies = quantizer(z)  # codes: (B'*H'*W', latent_dim)
+            codes, indices = quantizer(z)  # codes: (B'*H'*W', latent_dim)
 
             codebook_losses += torch.mean((codes - z.detach()) ** 2)
             commitment_losses += torch.mean((z - codes.detach()) ** 2)
@@ -306,29 +306,39 @@ class ConvResidualVQVAE(nn.Module):
 
             accum_quantized_latent += codes
 
-            l_vecs.append(codes)
-            l_indicies.append(indicies)
+            if not self.training:
+                usage_ratio = indices.unique().numel() / self.codebook_size
+                usage_ratio = torch.tensor(usage_ratio, device=z.device, dtype=z.dtype, requires_grad=False)
+                codebooks_usage_ratio.append(usage_ratio)
+                counts = torch.bincount(indices, minlength=self.codebook_size).float().requires_grad_(False).to(z.device)
+                probs = counts / counts.sum()
+                entropy = -(probs * torch.log(probs + 1e-10)).sum()
+                perplexity = torch.exp(entropy)
+                codebooks_perplexities.append(perplexity)
 
             z = z - codes.detach()
 
-        return accum_quantized_latent, codebook_losses, commitment_losses
+        codebooks_usage_ratio = torch.tensor(codebooks_usage_ratio, device=z.device)
+        codebooks_perplexities = torch.tensor(codebooks_perplexities, device=z.device)
+
+        return accum_quantized_latent, codebook_losses, commitment_losses, codebooks_usage_ratio, codebooks_perplexities
 
     def dec_forward(self, z):
         # z: (B, latent_dim, H', W')
         batch_size, latent_dim, h, w = z.shape
         z = z.permute(0, 2, 3, 1).contiguous().reshape(-1, latent_dim)  # (B*H'*W', latent_dim)
-        quantized_z, codebook_loss, commitment_loss = self.quantize(z)
+        quantized_z, codebook_loss, commitment_loss, codebooks_usage_ratios, codebooks_perplexities = self.quantize(z)
         quantized_z = quantized_z.reshape(batch_size, h, w, latent_dim).permute(0, 3, 1, 2).contiguous()  # (B, latent_dim, H', W')
         dec = self.decoder(quantized_z)  # (B, C, H, W)
 
-        return dec, quantized_z, codebook_loss, commitment_loss
+        return dec, quantized_z, codebook_loss, commitment_loss, codebooks_usage_ratios, codebooks_perplexities
 
     def forward(self, x):
         # x: (B, C, H, W)
         latent = self.enc_forward(x)  # (B, latent_dim, H', W')
-        dec, quantized_latent, codebook_loss, commitment_loss = self.dec_forward(latent)
+        dec, quantized_latent, codebook_loss, commitment_loss, codebooks_usage_ratios, codebooks_perplexities = self.dec_forward(latent)
         # dec: (B, C, H, W); quantized_latent: (B, latent_dim, H', W')
-        return latent, quantized_latent, dec, codebook_loss, commitment_loss
+        return latent, quantized_latent, dec, codebook_loss, commitment_loss, codebooks_usage_ratios, codebooks_perplexities
 
 def ConvResidualVQVAE_ResNet50Backbone(in_channels=3):
     return ConvResidualVQVAE(layer_counts=[3,4,6,3], in_channels=in_channels)
@@ -342,10 +352,14 @@ def ConvResidualVQVAE_ResNet150Backbone(in_channels=3):
 if __name__ == '__main__':
     rvq = ConvResidualVQVAE(layer_counts=[3, 4, 6, 3], in_channels=3)
     x = torch.rand(size=(2, 3, 128, 128))
-    print([y.shape for y in rvq(x)])
-    print([name for name,p in rvq.named_parameters()])
+    print([y for y in rvq(x)])
+    # print([name for name,p in rvq.named_parameters()])
+    #
+    # params = 0
+    # for p in rvq.parameters():
+    #     params += p.numel()
+    # print(params)
 
-    params = 0
-    for p in rvq.parameters():
-        params += p.numel()
-    print(params)
+    # latent, quantized_latent, dec, codebook_loss, commitment_loss = rvq(x)
+    # print(quantized_latent.unique().numel() / 1024)
+    # print(quantized_latent)
