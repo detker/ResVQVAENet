@@ -50,6 +50,14 @@ def transforms_testing(img_wh=224,
         v2.ToDtype(torch.float32, scale=True)
     ])
 
+# def transform_inference(img_wh=224,
+#                         interpolation=InterpolationMode.BILINEAR,
+#                         resize_wh=256):
+#     return Compose([
+#         v2.Resize((resize_wh, resize_wh), interpolation=interpolation, antialias=True),
+#         v2.CenterCrop((img_wh, img_wh)),
+#         v2.PILToTensor()
+#     ])
 def transforms_training(img_wh=224,
                         interpolation=InterpolationMode.BILINEAR,
                         horizontal_flip_prob=0.5):

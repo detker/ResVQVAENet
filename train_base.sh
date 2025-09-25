@@ -26,7 +26,7 @@ accelerate launch train.py \
     --commitment_loss_beta 0.25 \
     --ema_decay 0.999 \
     --max_no_of_checkpoints 5 \
-    --img_size 64 \
+    --img_size 128 \
     --in_channels 3 \
     --num_workers 16 \
     --base_weights_no_lora 'base_weights' \

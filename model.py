@@ -352,6 +352,7 @@ def ConvResidualVQVAE_ResNet150Backbone(in_channels=3):
 if __name__ == '__main__':
     rvq = ConvResidualVQVAE(layer_counts=[3, 4, 6, 3], in_channels=3)
     x = torch.rand(size=(2, 3, 128, 128))
+    print(rvq(x))
     print([y for y in rvq(x)])
     # print([name for name,p in rvq.named_parameters()])
     #

@@ -3,30 +3,31 @@ import torch.nn as nn
 
 
 class VGG19(nn.Module):
-    def __init__(self, in_channels=3, img_wh=64):
+    def __init__(self, in_channels=3):
         super().__init__()
         self.n_convs = 16
+        self.chann = 64
 
-        self.conv1 = nn.Conv2d(in_channels, img_wh, kernel_size=3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(img_wh, img_wh, 3, 1, 1)
+        self.conv1 = nn.Conv2d(in_channels, self.chann, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(self.chann, self.chann, 3, 1, 1)
 
-        self.conv3 = nn.Conv2d(img_wh, 2 * img_wh, kernel_size=3, stride=1, padding=1)
-        self.conv4 = nn.Conv2d(2 * img_wh, 2 * img_wh, kernel_size=3, stride=1, padding=1)
+        self.conv3 = nn.Conv2d(self.chann, 2 * self.chann, kernel_size=3, stride=1, padding=1)
+        self.conv4 = nn.Conv2d(2 * self.chann, 2 * self.chann, kernel_size=3, stride=1, padding=1)
 
-        self.conv5 = nn.Conv2d(2 * img_wh, 4 * img_wh, kernel_size=3, stride=1, padding=1)
-        self.conv6 = nn.Conv2d(4 * img_wh, 4 * img_wh, kernel_size=3, stride=1, padding=1)
-        self.conv7 = nn.Conv2d(4 * img_wh, 4 * img_wh, kernel_size=3, stride=1, padding=1)
-        self.conv8 = nn.Conv2d(4 * img_wh, 4 * img_wh, kernel_size=3, stride=1, padding=1)
+        self.conv5 = nn.Conv2d(2 * self.chann, 4 * self.chann, kernel_size=3, stride=1, padding=1)
+        self.conv6 = nn.Conv2d(4 * self.chann, 4 * self.chann, kernel_size=3, stride=1, padding=1)
+        self.conv7 = nn.Conv2d(4 * self.chann, 4 * self.chann, kernel_size=3, stride=1, padding=1)
+        self.conv8 = nn.Conv2d(4 * self.chann, 4 * self.chann, kernel_size=3, stride=1, padding=1)
 
-        self.conv9 = nn.Conv2d(4 * img_wh, 8 * img_wh, kernel_size=3, stride=1, padding=1)
-        self.conv10 = nn.Conv2d(8 * img_wh, 8 * img_wh, kernel_size=3, stride=1, padding=1)
-        self.conv11 = nn.Conv2d(8 * img_wh, 8 * img_wh, kernel_size=3, stride=1, padding=1)
-        self.conv12 = nn.Conv2d(8 * img_wh, 8 * img_wh, kernel_size=3, stride=1, padding=1)
+        self.conv9 = nn.Conv2d(4 * self.chann, 8 * self.chann, kernel_size=3, stride=1, padding=1)
+        self.conv10 = nn.Conv2d(8 * self.chann, 8 * self.chann, kernel_size=3, stride=1, padding=1)
+        self.conv11 = nn.Conv2d(8 * self.chann, 8 * self.chann, kernel_size=3, stride=1, padding=1)
+        self.conv12 = nn.Conv2d(8 * self.chann, 8 * self.chann, kernel_size=3, stride=1, padding=1)
 
-        self.conv13 = nn.Conv2d(8 * img_wh, 8 * img_wh, kernel_size=3, stride=1, padding=1)
-        self.conv14 = nn.Conv2d(8 * img_wh, 8 * img_wh, kernel_size=3, stride=1, padding=1)
-        self.conv15 = nn.Conv2d(8 * img_wh, 8 * img_wh, kernel_size=3, stride=1, padding=1)
-        self.conv16 = nn.Conv2d(8 * img_wh, 8 * img_wh, kernel_size=3, stride=1, padding=1)
+        self.conv13 = nn.Conv2d(8 * self.chann, 8 * self.chann, kernel_size=3, stride=1, padding=1)
+        self.conv14 = nn.Conv2d(8 * self.chann, 8 * self.chann, kernel_size=3, stride=1, padding=1)
+        self.conv15 = nn.Conv2d(8 * self.chann, 8 * self.chann, kernel_size=3, stride=1, padding=1)
+        self.conv16 = nn.Conv2d(8 * self.chann, 8 * self.chann, kernel_size=3, stride=1, padding=1)
 
         self.mp = nn.MaxPool2d(kernel_size=2, stride=2)
         self.relu = nn.ReLU()

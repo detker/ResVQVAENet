@@ -13,6 +13,7 @@ from safetensors.torch import load_file, save_file
 from accelerate import Accelerator
 from transformers import get_cosine_schedule_with_warmup
 from torchvision.models import vgg19 as pretrained_vgg19
+from torchvision.transforms import Normalize
 
 from utils import ImageNetDataset, transforms_training, transforms_testing
 from model import ConvResidualVQVAE_ResNet50Backbone
@@ -273,7 +274,7 @@ def main():
     ### perceptual loss ###
     vgg_model = None
     if args.use_perceptual_loss:
-        vgg_model = VGG19(in_channels=args.in_channels, img_wh=args.img_size)
+        vgg_model = VGG19(in_channels=args.in_channels)
         pretrained_vgg = pretrained_vgg19(pretrained=True)
         pretrained_state_dict = pretrained_vgg.state_dict()
         my_state_dict = vgg_model.state_dict()
@@ -286,6 +287,10 @@ def main():
         vgg_model = vgg_model.to(accelerator.device)
 
     def perceptual_loss(recon, x):
+        normalize = Normalize(mean=[0.485, 0.456, 0.406],
+                                std=[0.229, 0.224, 0.225])
+        x = normalize(x)
+        recon = normalize(recon)
         input = torch.cat([recon, x], dim=0)
         return vgg_model(input)
 
@@ -380,14 +385,14 @@ def main():
                 accum_train_loss = 0
 
                 pbar.update(1)
-                break
+                # break
         pbar.close()
 
 
         usage_ratios = []
         perplexities = []
         model.eval()
-        accelerator.print('eval momo')
+        # accelerator.print('eval momo')
         counter = 0
         for data, labels in testloader:
             data = data.to(accelerator.device)
@@ -413,8 +418,8 @@ def main():
             gathered_codebooks_usage_ratio = torch.mean(gathered_codebooks_usage_ratio, dim=0).tolist()
             usage_ratios.append(gathered_codebooks_usage_ratio)
             perplexities.append(gathered_codebooks_perplexities)
-            counter += 1
-            if counter > 2: break
+            # counter += 1
+            # if counter > 2: break
 
 
         epoch_train_loss = np.mean(train_losses).item()
@@ -435,20 +440,21 @@ def main():
                              'codebooks_perplexity_min': min(epoch_perplexity)},
                             step=epoch)
 
-        if epoch % args.save_checkpoint_interval == 0:
-            checkpoints_path = os.path.join(experiment_path, args.checkpoint_dir)
-            os.makedirs(checkpoints_path, exist_ok=True)
-            listdirs = [file for file in os.listdir(checkpoints_path) if file.startswith('checkpoint')]
-            if len(listdirs) >= args.max_no_of_checkpoints:
-                listdirs_sorted = sorted(listdirs, key=lambda x: int(x.split('_')[-1]))
-                dirs_to_delete = listdirs_sorted[:-args.max_no_of_checkpoints + 1]
-                for directory in dirs_to_delete:
-                    shutil.rmtree(os.path.join(checkpoints_path, directory))
-            save_path = os.path.join(checkpoints_path, f'checkpoint_{epoch}')
-            accelerator.save_state(save_path)
-            accelerator.print('State saved.')
-
         accelerator.wait_for_everyone()
+        if accelerator.is_main_process:
+            if epoch % args.save_checkpoint_interval == 0:
+                checkpoints_path = os.path.join(experiment_path, args.checkpoint_dir)
+                os.makedirs(checkpoints_path, exist_ok=True)
+                listdirs = [file for file in os.listdir(checkpoints_path) if file.startswith('checkpoint')]
+                if len(listdirs) >= args.max_no_of_checkpoints:
+                    listdirs_sorted = sorted(listdirs, key=lambda x: int(x.split('_')[-1]))
+                    dirs_to_delete = listdirs_sorted[:-args.max_no_of_checkpoints + 1]
+                    for directory in dirs_to_delete:
+                        shutil.rmtree(os.path.join(checkpoints_path, directory))
+                save_path = os.path.join(checkpoints_path, f'checkpoint_{epoch}')
+                accelerator.save_state(save_path)
+                accelerator.print('State saved.')
+
         accelerator.print(f'End of epoch {epoch + 1}.')
 
     accelerator.print('End of training loop. Saving final merged weights.')
