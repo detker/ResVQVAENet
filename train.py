@@ -373,7 +373,7 @@ def main():
                 accum_train_loss = 0
 
                 pbar.update(1)
-                break
+                # break
         pbar.close()
 
 
@@ -390,24 +390,24 @@ def main():
             loss = reconstruction_loss + codebook_loss + args.commitment_loss_beta * commitment_loss
             loss = loss.detach()
             gathered = accelerator.gather_for_metrics(loss)
-            accelerator.print('wessa', gathered)
+            # accelerator.print('wessa', gathered)
             test_losses.append(torch.mean(gathered).item())
 
-            codebooks_usage_ratios = codebooks_usage_ratios.detach()
-            codebooks_perplexities = codebooks_perplexities.detach()
+            codebooks_usage_ratios = codebooks_usage_ratios.detach().unsqueeze(0)
+            codebooks_perplexities = codebooks_perplexities.detach().unsqueeze(0)
             gathered_codebooks_usage_ratio = accelerator.gather_for_metrics(codebooks_usage_ratios)
             gathered_codebooks_perplexities = accelerator.gather_for_metrics(codebooks_perplexities)
             if gathered_codebooks_usage_ratio.ndim == 1:
                 gathered_codebooks_usage_ratio = gathered_codebooks_usage_ratio.unsqueeze(0)
-            print(gathered_codebooks_usage_ratio)
+            # print(gathered_codebooks_usage_ratio)
             if gathered_codebooks_perplexities.ndim == 1:
                 gathered_codebooks_perplexities = gathered_codebooks_perplexities.unsqueeze(0)
             gathered_codebooks_perplexities = torch.mean(gathered_codebooks_perplexities, dim=0).tolist()
             gathered_codebooks_usage_ratio = torch.mean(gathered_codebooks_usage_ratio, dim=0).tolist()
             usage_ratios.append(gathered_codebooks_usage_ratio)
             perplexities.append(gathered_codebooks_perplexities)
-            counter += 1
-            if counter > 2: break
+            # counter += 1
+            # if counter > 2: break
 
 
         epoch_train_loss = np.mean(train_losses).item()
@@ -417,12 +417,16 @@ def main():
 
         accelerator.print(
             f'Epoch: {epoch+1} | Training Loss: {epoch_train_loss:.5f} | Testing Loss: {epoch_test_loss:.5f}.')
-        accelerator.print(f'Codebooks usage ratio: {epoch_usage_ratio} | Codebooks perplexity: {epoch_perplexity}')
+        accelerator.print(f'Codebooks usage ratio: {epoch_usage_ratio}')
+        accelerator.print(f'Codebooks perplexity: {epoch_perplexity}')
 
         if args.log_wandb:
             accelerator.log({"training_loss": epoch_train_loss,
                              "testing_loss": epoch_test_loss,
-                             "lr": scheduler.get_last_lr()[0]}, step=epoch)
+                             "lr": scheduler.get_last_lr()[0],
+                             'codebooks_usage_ratio_min': min(epoch_usage_ratio),
+                             'codebooks_perplexity_min': min(epoch_perplexity)},
+                            step=epoch)
 
         if epoch % args.save_checkpoint_interval == 0:
             checkpoints_path = os.path.join(experiment_path, args.checkpoint_dir)
