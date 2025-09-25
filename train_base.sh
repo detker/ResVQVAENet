@@ -13,10 +13,10 @@ accelerate launch train.py \
     --lora_target_modules 'conv1,conv2,conv3' \
     --lora_exclude_modules 'embedding,upsample,downsample,conv_transpose,conv0' \
     --max_grad_norm 1.0 \
-    --per_gpu_batch_size 8 \
-    --gradient_accumulation_steps 4 \
-    --warmup_epochs 5 \
-    --epochs 300 \
+    --per_gpu_batch_size 128 \
+    --gradient_accumulation_steps 1 \
+    --warmup_epochs 3 \
+    --epochs 200 \
     --save_checkpoint_interval 1 \
     --learning_rate 3e-4 \
     --weight_decay 0.1 \
@@ -28,7 +28,7 @@ accelerate launch train.py \
     --max_no_of_checkpoints 5 \
     --img_size 64 \
     --in_channels 3 \
-    --num_workers 8 \
+    --num_workers 16 \
     --base_weights_no_lora 'base_weights' \
     --custom_weight_init \
     --perceptual_loss_lambda 0.1 \
