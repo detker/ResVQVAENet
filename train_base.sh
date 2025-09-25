@@ -26,14 +26,15 @@ accelerate launch train.py \
     --commitment_loss_beta 0.25 \
     --ema_decay 0.999 \
     --max_no_of_checkpoints 5 \
-    --img_size 224 \
+    --img_size 64 \
     --in_channels 3 \
     --num_workers 8 \
     --base_weights_no_lora 'base_weights' \
     --custom_weight_init \
+    --perceptual_loss_lambda 0.1 \
+    --use_perceptual_loss
 #    --resume_from_checkpoint 'checkpoint_0'
 #    --log_wandb
-#    --perceptual_loss_lambda 0.1 \
-#    --use_perceptual_loss
+
 #    --use_lora
 #    --merged_weights_from_lora 'lora_merged_weights/reconstruct.safetensors'

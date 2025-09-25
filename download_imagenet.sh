@@ -26,7 +26,7 @@ mkdir -p "$DATA_FOLDER"
 #kaggle datasets download -d "$KAGGLE_DATASET" -p "$DATA_FOLDER"
 #echo 'Validation part downloaded. Done.'
 
-cat file_list.txt | xargs -n 1 -P 5 -I {} kaggle datasets download -d sautkin/{} -p "$DATA_FOLDER"
+cat file_list.txt | xargs -n 1 -P 2 -I {} kaggle datasets download -d sautkin/{} -p "$DATA_FOLDER"
 
 for file in $(cat file_list.txt | head -n 4); do
   ZIP_FILE=$(ls "$DATA_FOLDER/$file.zip" | head -n 1)

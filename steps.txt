@@ -10,10 +10,14 @@ ssh-add ~/.ssh/id_ed25519
 put public key on github
 donwlaod repo
 
+put kaggle api key in ~/.kaggle/kaggle.json
+
 download_data.sh
 
 pip install -r requirements.txt
 
 accelerate config
 wandb config
+
+set up hyperparameters
 

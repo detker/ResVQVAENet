@@ -12,11 +12,12 @@ from torch.utils.data import DataLoader
 from safetensors.torch import load_file, save_file
 from accelerate import Accelerator
 from transformers import get_cosine_schedule_with_warmup
-from torchvision.models import vgg16
+from torchvision.models import vgg19 as pretrained_vgg19
 
 from utils import ImageNetDataset, transforms_training, transforms_testing
 from model import ConvResidualVQVAE_ResNet50Backbone
 from lora import LoRAConfig, LoRAModel
+from vgg19 import VGG19
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -272,15 +273,21 @@ def main():
     ### perceptual loss ###
     vgg_model = None
     if args.use_perceptual_loss:
-        vgg_model = vgg16(pretrained=True).features[:16].eval()
+        vgg_model = VGG19(in_channels=args.in_channels, img_wh=args.img_size)
+        pretrained_vgg = pretrained_vgg19(pretrained=True)
+        pretrained_state_dict = pretrained_vgg.state_dict()
+        my_state_dict = vgg_model.state_dict()
+        new_state_dict = {}
+        for p_pretrained, p in zip(pretrained_state_dict.keys(), my_state_dict.keys()):
+            new_state_dict[p] = pretrained_state_dict[p_pretrained]
+        vgg_model.load_state_dict(new_state_dict)
         for p in vgg_model.parameters():
             p.requires_grad = False
         vgg_model = vgg_model.to(accelerator.device)
 
-    def perceptual_loss(x, recon):
-        f_x = vgg_model(x)
-        f_recon = vgg_model(recon)
-        return torch.mean((f_x - f_recon) ** 2)
+    def perceptual_loss(recon, x):
+        input = torch.cat([recon, x], dim=0)
+        return vgg_model(input)
 
     def update_ema(ema_model, model, decay=0.999):
         with torch.no_grad():
@@ -348,7 +355,7 @@ def main():
                 reconstruction_loss = torch.mean((data - decoded) ** 2)
                 loss = reconstruction_loss + codebook_loss + args.commitment_loss_beta * commitment_loss
                 if vgg_model is not None:
-                    loss = loss + args.perceptual_loss_lambda * perceptual_loss(data, decoded)
+                    loss = loss + args.perceptual_loss_lambda * perceptual_loss(decoded, data)
 
                 accum_train_loss += loss
                 loss = loss / args.gradient_accumulation_steps
@@ -373,7 +380,7 @@ def main():
                 accum_train_loss = 0
 
                 pbar.update(1)
-                # break
+                break
         pbar.close()
 
 
@@ -406,8 +413,8 @@ def main():
             gathered_codebooks_usage_ratio = torch.mean(gathered_codebooks_usage_ratio, dim=0).tolist()
             usage_ratios.append(gathered_codebooks_usage_ratio)
             perplexities.append(gathered_codebooks_perplexities)
-            # counter += 1
-            # if counter > 2: break
+            counter += 1
+            if counter > 2: break
 
 
         epoch_train_loss = np.mean(train_losses).item()
