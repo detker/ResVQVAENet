@@ -12,11 +12,11 @@ from torch.utils.data import DataLoader
 from safetensors.torch import load_file, save_file
 from accelerate import Accelerator
 from transformers import get_cosine_schedule_with_warmup
-from torchvision.models import vgg19 as pretrained_vgg19
+from torchvision.models import vgg19 as pretrained_vgg19, resnet50, ResNet50_Weights
 from torchvision.transforms import Normalize
 
 from utils import ImageNetDataset, transforms_training, transforms_testing
-from model import ConvResidualVQVAE_ResNet50Backbone
+from model2 import ConvResidualVQVAE_ResNet50Backbone
 from lora import LoRAConfig, LoRAModel
 from vgg19 import VGG19
 
@@ -262,6 +262,7 @@ def main():
     else:
         if args.custom_weight_init:
             model.apply(model.init_weights)
+
         ema_model = ConvResidualVQVAE_ResNet50Backbone(args.in_channels)
         with accelerator.main_process_first():
             ema_model.load_state_dict(model.state_dict())
@@ -388,7 +389,7 @@ def main():
                 accum_train_loss = 0
 
                 pbar.update(1)
-                # break
+                break
         pbar.close()
 
 
@@ -414,15 +415,15 @@ def main():
             gathered_codebooks_perplexities = accelerator.gather_for_metrics(codebooks_perplexities)
             if gathered_codebooks_usage_ratio.ndim == 1:
                 gathered_codebooks_usage_ratio = gathered_codebooks_usage_ratio.unsqueeze(0)
-            # print(gathered_codebooks_usage_ratio)
+            print(gathered_codebooks_usage_ratio)
             if gathered_codebooks_perplexities.ndim == 1:
                 gathered_codebooks_perplexities = gathered_codebooks_perplexities.unsqueeze(0)
             gathered_codebooks_perplexities = torch.mean(gathered_codebooks_perplexities, dim=0).tolist()
             gathered_codebooks_usage_ratio = torch.mean(gathered_codebooks_usage_ratio, dim=0).tolist()
             usage_ratios.append(gathered_codebooks_usage_ratio)
             perplexities.append(gathered_codebooks_perplexities)
-            # counter += 1
-            # if counter > 2: break
+            counter += 1
+            if counter > 2: break
 
 
         epoch_train_loss = np.mean(train_losses).item()
@@ -459,6 +460,7 @@ def main():
                 accelerator.print('State saved.')
 
         accelerator.print(f'End of epoch {epoch + 1}.')
+        break
 
     accelerator.print('End of training loop. Saving final merged weights.')
 

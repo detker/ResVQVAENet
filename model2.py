@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class EncResidualBlock(nn.Module):
@@ -80,6 +81,64 @@ class DecResidualBlock(nn.Module):
 
         return x
 
+# Simple residual block (like in VQGAN)
+class ResBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+        self.skip = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+        self.norm1 = nn.BatchNorm2d(in_channels)
+        self.norm2 = nn.BatchNorm2d(out_channels)
+
+    def forward(self, x):
+        h = self.conv1(F.relu(self.norm1(x)))
+        h = self.conv2(F.relu(self.norm2(h)))
+        return h + self.skip(x)
+
+# Decoder with progressive upsampling
+class VQGANDecoder(nn.Module):
+    def __init__(self, latent_dim=512):
+        super().__init__()
+
+        self.block1 = ResBlock(latent_dim, 256)  # [B, 512, H, W] -> [B, 256, H, W]
+        self.up1 = nn.Sequential(nn.Upsample(scale_factor=2, mode="nearest"),
+                                 nn.Conv2d(256, 256, 3, padding=1))
+
+        self.block2 = ResBlock(256, 128)
+        self.up2 = nn.Sequential(nn.Upsample(scale_factor=2, mode="nearest"),
+                                 nn.Conv2d(128, 128, 3, padding=1))
+
+        self.block3 = ResBlock(128, 64)
+        self.up3 = nn.Sequential(nn.Upsample(scale_factor=2, mode="nearest"),
+                                 nn.Conv2d(64, 64, 3, padding=1))
+
+        self.up4 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv2d(64, 64, 3, padding=1)
+        )
+
+        self.final_block = ResBlock(64, 64)
+        self.out = nn.Conv2d(64, 3, 1)  # RGB output
+        self.gate = nn.Sigmoid()
+
+    def forward(self, z):
+        # z: [B, latent_dim, H, W]  (e.g., [B, 512, 16, 16])
+        x = self.block1(z)
+        x = self.up1(x)
+
+        x = self.block2(x)
+        x = self.up2(x)
+
+        x = self.block3(x)
+        x = self.up3(x)
+
+        x = self.up4(x)
+
+        x = self.final_block(x)
+        x = self.out(x)
+
+        return self.gate(x) # keep outputs in [0,1]
 
 class VectorQuantizer(nn.Module):
     def __init__(self, latent_dim=2, codebook_size=1024):
@@ -264,12 +323,15 @@ class ConvResidualVQVAE(nn.Module):
 
         self.encoder = ResEncoder(layer_counts=layer_counts, in_channels=in_channels)
 
+        self.conv_proj = nn.Conv2d(latent_dim, 512, kernel_size=1, stride=1)
+
         self.vqs = nn.ModuleList([
-            VectorQuantizer(latent_dim=latent_dim, codebook_size=codebook_size)
+            VectorQuantizer(latent_dim=512, codebook_size=256)
             for _ in range(n_codebooks)
         ])
 
-        self.decoder = ResDecoder(layer_counts=layer_counts[::-1], out_channels=in_channels)
+        # self.decoder = ResDecoder(layer_counts=layer_counts[::-1], out_channels=in_channels)
+        self.decoder = VQGANDecoder(latent_dim=512)
 
     def init_weights(self, module):
         if isinstance(module, nn.Conv2d) or isinstance(module, nn.ConvTranspose2d):
@@ -285,7 +347,7 @@ class ConvResidualVQVAE(nn.Module):
     def enc_forward(self, x):
         # x: (B, in_channels, H, W)
         z = self.encoder(x)
-        print(z.shape)
+        # print(z.shape)
         return z  # (B, latent_dim, H', W')
 
     def quantize(self, z):
@@ -327,17 +389,23 @@ class ConvResidualVQVAE(nn.Module):
     def dec_forward(self, z):
         # z: (B, latent_dim, H', W')
         batch_size, latent_dim, h, w = z.shape
-        z = z.permute(0, 2, 3, 1).contiguous().reshape(-1, latent_dim)  # (B*H'*W', latent_dim)
-        quantized_z, codebook_loss, commitment_loss, codebooks_usage_ratios, codebooks_perplexities = self.quantize(z)
+        z_prim = z.permute(0, 2, 3, 1).contiguous().reshape(-1, latent_dim)  # (B*H'*W', latent_dim)
+        quantized_z, codebook_loss, commitment_loss, codebooks_usage_ratios, codebooks_perplexities = self.quantize(z_prim)
         quantized_z = quantized_z.reshape(batch_size, h, w, latent_dim).permute(0, 3, 1, 2).contiguous()  # (B, latent_dim, H', W')
-        dec = self.decoder(quantized_z)  # (B, C, H, W)
+        # print(quantized_z.shape)
+        # print(z.shape)
+        x = quantized_z + 0.05*z
+        dec = self.decoder(x)  # (B, C, H, W)
 
         return dec, quantized_z, codebook_loss, commitment_loss, codebooks_usage_ratios, codebooks_perplexities
 
     def forward(self, x):
         # x: (B, C, H, W)
         latent = self.enc_forward(x)  # (B, latent_dim, H', W')
-        dec, quantized_latent, codebook_loss, commitment_loss, codebooks_usage_ratios, codebooks_perplexities = self.dec_forward(latent)
+        latent_proj = self.conv_proj(latent) # (B, proj_latent_dim, H', W')
+        # print(latent_proj.shape)
+        dec, quantized_latent, codebook_loss, commitment_loss, codebooks_usage_ratios, codebooks_perplexities = self.dec_forward(latent_proj)
+        # print(dec.shape)
         # dec: (B, C, H, W); quantized_latent: (B, latent_dim, H', W')
         return latent, quantized_latent, dec, codebook_loss, commitment_loss, codebooks_usage_ratios, codebooks_perplexities
 
@@ -353,7 +421,7 @@ def ConvResidualVQVAE_ResNet150Backbone(in_channels=3):
 if __name__ == '__main__':
     rvq = ConvResidualVQVAE(layer_counts=[3, 4, 6, 3], in_channels=3)
     x = torch.rand(size=(2, 3, 224, 224))
-    print(rvq(x))
+    rvq(x)
     # print([y for y in rvq(x)])
     # print([name for name,p in rvq.named_parameters()])
     #

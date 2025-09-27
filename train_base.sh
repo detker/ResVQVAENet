@@ -1,9 +1,9 @@
 #!/bin/bash
 
-accelerate launch train.py \
+accelerate launch train2.py \
     --experiment_name 'Conv_ResidualVQVAE_ResNet50Backbone' \
     --working_directory "work_dir" \
-    --path_to_data 'data' \
+    --path_to_data 'essa' \
     --checkpoint_dir 'checkpoints' \
     --lora_rank 4 \
     --lora_alpha 8 \
@@ -13,8 +13,8 @@ accelerate launch train.py \
     --lora_target_modules 'conv1,conv2,conv3' \
     --lora_exclude_modules 'embedding,upsample,downsample,conv_transpose,conv0' \
     --max_grad_norm 1.0 \
-    --per_gpu_batch_size 128 \
-    --gradient_accumulation_steps 1 \
+    --per_gpu_batch_size 8 \
+    --gradient_accumulation_steps 4 \
     --warmup_epochs 3 \
     --epochs 200 \
     --save_checkpoint_interval 1 \
@@ -26,12 +26,12 @@ accelerate launch train.py \
     --commitment_loss_beta 0.25 \
     --ema_decay 0.999 \
     --max_no_of_checkpoints 5 \
-    --img_size 128 \
+    --img_size 224 \
     --in_channels 3 \
-    --num_workers 16 \
+    --num_workers 5 \
     --base_weights_no_lora 'base_weights' \
     --custom_weight_init \
-    --perceptual_loss_lambda 0.1 \
+    --perceptual_loss_lambda 1e-3 \
     --use_perceptual_loss
 #    --resume_from_checkpoint 'checkpoint_0'
 #    --log_wandb
