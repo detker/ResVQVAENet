@@ -3,6 +3,18 @@ import torch.nn as nn
 
 
 class EncResidualBlock(nn.Module):
+    """
+    A residual block for the encoder.
+
+    :param in_planes: Number of input channels.
+    :type in_planes: int
+    :param planes: Number of intermediate channels.
+    :type planes: int
+    :param downsample: Downsampling layer, if required.
+    :type downsample: nn.Module, optional
+    :param middle_conv_stride: Stride for the middle convolutional layer.
+    :type middle_conv_stride: int
+    """
     def __init__(self, in_planes, planes, downsample=None, middle_conv_stride=1):
         super().__init__()
 
@@ -42,6 +54,18 @@ class EncResidualBlock(nn.Module):
 
 
 class DecResidualBlock(nn.Module):
+    """
+    A residual block for the decoder.
+
+    :param in_planes: Number of input channels.
+    :type in_planes: int
+    :param planes: Number of intermediate channels.
+    :type planes: int
+    :param upsample: Upsampling layer, if required.
+    :type upsample: nn.Module, optional
+    :param middle_conv_stride: Stride for the middle convolutional layer.
+    :type middle_conv_stride: int
+    """
     def __init__(self, in_planes, planes, upsample=None, middle_conv_stride=1):
         super().__init__()
 
@@ -82,6 +106,14 @@ class DecResidualBlock(nn.Module):
 
 
 class VectorQuantizer(nn.Module):
+    """
+    A vector quantization layer for latent space.
+
+    :param latent_dim: Dimensionality of the latent space.
+    :type latent_dim: int
+    :param codebook_size: Number of entries in the codebook.
+    :type codebook_size: int
+    """
     def __init__(self, latent_dim=2, codebook_size=1024):
         super().__init__()
         self.latent_dim = latent_dim
@@ -109,6 +141,14 @@ class VectorQuantizer(nn.Module):
 
 
 class ResEncoder(nn.Module):
+    """
+    A residual encoder with multiple layers.
+
+    :param layer_counts: List specifying the number of blocks in each layer.
+    :type layer_counts: list
+    :param in_channels: Number of input channels.
+    :type in_channels: int
+    """
     def __init__(self, layer_counts, in_channels=3):
         super().__init__()
 
@@ -177,6 +217,14 @@ class ResEncoder(nn.Module):
 
 
 class ResDecoder(nn.Module):
+    """
+    A residual decoder with multiple layers.
+
+    :param layer_counts: List specifying the number of blocks in each layer.
+    :type layer_counts: list
+    :param out_channels: Number of output channels.
+    :type out_channels: int
+    """
     def __init__(self, layer_counts, out_channels=3):
         super().__init__()
 
@@ -253,6 +301,20 @@ class ResDecoder(nn.Module):
 
 
 class ConvResidualVQVAE(nn.Module):
+    """
+    A convolutional residual VQ-VAE with ResNet50 backbone model with encoder, vector quantizers, and decoder.
+
+    :param layer_counts: List specifying the number of blocks in each layer.
+    :type layer_counts: list
+    :param in_channels: Number of input channels.
+    :type in_channels: int
+    :param latent_dim: Dimensionality of the latent space.
+    :type latent_dim: int
+    :param codebook_size: Number of entries in the codebook.
+    :type codebook_size: int
+    :param n_codebooks: Number of codebooks.
+    :type n_codebooks: int
+    """
     def __init__(self, layer_counts, in_channels=3, latent_dim=2048, codebook_size=128, n_codebooks=4):
         super().__init__()
 
@@ -271,21 +333,20 @@ class ConvResidualVQVAE(nn.Module):
 
         self.decoder = ResDecoder(layer_counts=layer_counts[::-1], out_channels=in_channels)
 
-    def init_weights(self, module):
-        if isinstance(module, nn.Conv2d) or isinstance(module, nn.ConvTranspose2d):
-            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
-            if module.bias is not None:
-                nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            nn.init.trunc_normal_(module.weight, mean=0, std=0.02)
-        elif isinstance(module, nn.BatchNorm2d):
-            module.weight.data.fill_(1.0)
-            module.bias.data.zero_()
+    # def init_weights(self, module):
+    #     if isinstance(module, nn.Conv2d) or isinstance(module, nn.ConvTranspose2d):
+    #         nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+    #         if module.bias is not None:
+    #             nn.init.zeros_(module.bias)
+    #     elif isinstance(module, nn.Embedding):
+    #         nn.init.trunc_normal_(module.weight, mean=0, std=0.02)
+    #     elif isinstance(module, nn.BatchNorm2d):
+    #         module.weight.data.fill_(1.0)
+    #         module.bias.data.zero_()
 
     def enc_forward(self, x):
         # x: (B, in_channels, H, W)
         z = self.encoder(x)
-        print(z.shape)
         return z  # (B, latent_dim, H', W')
 
     def quantize(self, z):
@@ -354,6 +415,7 @@ if __name__ == '__main__':
     rvq = ConvResidualVQVAE(layer_counts=[3, 4, 6, 3], in_channels=3)
     x = torch.rand(size=(2, 3, 224, 224))
     print(rvq(x))
+
     # print([y for y in rvq(x)])
     # print([name for name,p in rvq.named_parameters()])
     #

@@ -15,129 +15,83 @@ from transformers import get_cosine_schedule_with_warmup
 from torchvision.models import vgg19 as pretrained_vgg19
 from torchvision.transforms import Normalize
 
-from utils import ImageNetDataset, transforms_training, transforms_testing
-from model import ConvResidualVQVAE_ResNet50Backbone
-from lora import LoRAConfig, LoRAModel
-from vgg19 import VGG19
+from src.utils import ImageNetDataset, transforms_training, transforms_testing
+from src.model import ConvResidualVQVAE_ResNet50Backbone
+from src.vgg19 import VGG19
 
 import warnings
 warnings.filterwarnings('ignore')
 
+
 def add_arguments(parser):
-    parser.add_argument("--experiment_name",
-                        help="Name of Experiment being Launched",
+    parser.add_argument('--experiment_name',
+                        help='Name of experiment',
                         required=True,
                         type=str)
 
-    parser.add_argument("--path_to_data",
-                        help="Path to ImageNet root folder which should contain \train and \validation folders",
+    parser.add_argument('--path_to_data',
+                        help='Path to ImageNet root folder which should contain \train and \test folders',
                         required=True,
                         type=str)
 
-    parser.add_argument("--working_directory",
-                        help="Working Directory where checkpoints and logs are stored, inside a \
-                        folder labeled by the experiment name",
+    parser.add_argument('--working_directory',
+                        help='Working Directory folder name where experiments'' checkpoints and logs are stored',
                         required=True,
                         type=str)
 
-    parser.add_argument("--checkpoint_dir",
-                        help="Working Directory where checkpoints and logs are stored, inside a \
-                        folder labeled by the experiment name",
+    parser.add_argument('--checkpoint_dir',
+                        help='Name of the folder where checkpoints are stored, inside a \
+                        folder labeled by the experiment name',
                         required=True,
                         type=str)
 
-    parser.add_argument("--perceptual_loss_lambda",
-                        help="Weight for perceptual loss",
-                        default=0.0,
-                        type=float)
-
-    parser.add_argument('--use_lora',
-                        type=bool,
-                        action=argparse.BooleanOptionalAction,
-                        help='Use lora')
-
-    parser.add_argument('--lora_rank',
-                        type=int,
-                        default=8,
-                        help='Rank of the LoRA adaptation matrices.')
-
-    parser.add_argument('--lora_alpha',
-                        type=int,
-                        default=8,
-                        help='Alpha scaling factor for LoRA.')
-
-    parser.add_argument('--lora_use_rslora',
-                        action=argparse.BooleanOptionalAction,
-                        default=False,
-                        help='Whether to use RS-LoRA.')
-
-    parser.add_argument('--lora_dropout',
-                        type=float,
-                        default=0.1,
-                        help='Dropout rate for LoRA layers.')
-
-    parser.add_argument('--lora_bias',
-                        type=str,
-                        default='none',
-                        choices=['none', 'lora_only', 'all'],
-                        help='Bias configuration for LoRA.')
-
-    parser.add_argument('--lora_target_modules',
-                        type=lambda x: [s.strip() for s in x.split(',')],
-                        help='Comma-separated list of target modules for LoRA.')
-
-    parser.add_argument('--lora_exclude_modules',
-                        type=lambda x: [s.strip() for s in x.split(',')],
-                        help='Comma-separated list of modules to exclude from LoRA.')
-
-    parser.add_argument("--epochs",
-                        help="Number of Epochs to Train",
+    parser.add_argument('--epochs',
+                        help='Number of epochs',
                         default=300,
                         type=int)
 
-    parser.add_argument("--warmup_epochs",
-                        help="Number of warmup Epochs",
+    parser.add_argument('--warmup_epochs',
+                        help='Number of warmup epochs',
                         default=30,
                         type=int)
 
-    parser.add_argument("--save_checkpoint_interval",
-                        help="After how many epochs to save model checkpoints",
+    parser.add_argument('--save_checkpoint_interval',
+                        help='After how many epochs to save model checkpoints',
                         default=1,
                         type=int)
 
-    parser.add_argument("--per_gpu_batch_size",
-                        help="Effective batch size. If split_batches is false, batch size is \
-                            multiplied by number of GPUs utilized ",
+    parser.add_argument('--per_gpu_batch_size',
+                        help='Batch size per GPU',
                         default=256,
                         type=int)
 
-    parser.add_argument("--gradient_accumulation_steps",
-                        help="Number of Gradient Accumulation Steps for Training",
+    parser.add_argument('--gradient_accumulation_steps',
+                        help='Number of gradient accumulation steps',
                         default=1,
                         type=int)
 
-    parser.add_argument("--learning_rate",
-                        help="Max Learning rate for cosine scheduler",
+    parser.add_argument('--learning_rate',
+                        help='Max learning rate for cosine scheduler',
                         default=0.003,
                         type=float)
 
-    parser.add_argument("--weight_decay",
-                        help="Weight decay for conv layers",
+    parser.add_argument('--weight_decay',
+                        help='Weight decay for optimizer',
                         default=0.1,
                         type=float)
 
-    parser.add_argument("--custom_weight_init",
-                        help="Do you want to initialize the model with truncated/kaiming normal layer?",
+    parser.add_argument('--custom_weight_init',
+                        help='Whether to initialize the model with truncated normal layers',
                         default=False,
                         action=argparse.BooleanOptionalAction)
 
-    parser.add_argument("--max_grad_norm",
-                        help="Maximum norm for gradient clipping",
+    parser.add_argument('--max_grad_norm',
+                        help='Maximum norm for gradient clipping',
                         default=1.0,
                         type=float)
 
-    parser.add_argument("--img_size",
-                        help="Width and Height of Images passed to model",
+    parser.add_argument('--img_size',
+                        help='Width and Height of frames',
                         default=224,
                         type=int)
 
@@ -146,25 +100,25 @@ def add_arguments(parser):
                         default=3,
                         type=int)
 
-    parser.add_argument("--num_workers",
-                        help="Number of workers for DataLoader",
+    parser.add_argument('--num_workers',
+                        help='Number of workers for DataLoader',
                         default=32,
                         type=int)
 
     parser.add_argument('--adam_beta1',
                         type=float,
                         default=0.9,
-                        help='Beta1 parameter for Adam optimizer.')
+                        help='Beta1 parameter for AdamW optimizer')
 
     parser.add_argument('--adam_beta2',
                         type=float,
                         default=0.999,
-                        help='Beta2 parameter for Adam optimizer.')
+                        help='Beta2 parameter for AdamW optimizer')
 
     parser.add_argument('--adam_epsilon',
                         type=float,
                         default=1e-8,
-                        help='Epsilon parameter for Adam optimizer.')
+                        help='Epsilon parameter for AdamW optimizer')
 
     parser.add_argument('--commitment_loss_beta',
                         type=float,
@@ -176,17 +130,23 @@ def add_arguments(parser):
                         default=0.999,
                         help='EMA decay value')
 
-    parser.add_argument("--log_wandb",
+    parser.add_argument('--use_perceptual_loss',
+                        type=bool,
                         action=argparse.BooleanOptionalAction,
-                        default=False)
+                        help='Use additional perceptual loss')
 
-    parser.add_argument("--resume_from_checkpoint",
-                        help="Checkpoint folder for model to resume training from, inside the experiment/checkpoints folder",
-                        default=None,
-                        type=str)
+    parser.add_argument('--perceptual_loss_lambda',
+                        help='Weight for perceptual loss',
+                        default=0.0,
+                        type=float)
 
-    parser.add_argument('--base_weights_no_lora',
-                        help='Pretrained base model weights for lora finetuning',
+    parser.add_argument('--log_wandb',
+                        action=argparse.BooleanOptionalAction,
+                        default=False,
+                        help='Log metrics to Weight & Biases')
+
+    parser.add_argument('--resume_from_checkpoint',
+                        help='Checkpoint folder for model to resume training from, inside the experiment/checkpoints folder',
                         default=None,
                         type=str)
 
@@ -195,24 +155,11 @@ def add_arguments(parser):
                         default=10,
                         help='Max number of latest checkpoints to store on disk.')
 
-    parser.add_argument('--merged_weights_from_lora',
-                        type=str,
-                        default=None,
-                        help='Weights path for lora finetuned model')
-
-    parser.add_argument('--use_perceptual_loss',
-                        type=bool,
-                        action=argparse.BooleanOptionalAction,
-                        help='Use additional Perceptual Loss (LoRA advised)')
-
 
 def main():
     parser = argparse.ArgumentParser()
     add_arguments(parser)
     args = parser.parse_args()
-
-    # assert args.use_lora == (args.merged_weights_from_lora is not None)
-    # assert not args.use_lora == (args.base_weights_no_lora is not None)
 
     experiment_path = os.path.join(args.working_directory, args.experiment_name)
     accelerator = Accelerator(project_dir=experiment_path,
@@ -222,11 +169,11 @@ def main():
     print(f'Device: {accelerator.device}')
 
     if args.log_wandb:
-        experiment_config = {"epochs": args.epochs,
-                             "effective_batch_size": args.per_gpu_batch_size * accelerator.num_processes,
-                             "learning_rate": args.learning_rate,
-                             "warmup_epochs": args.warmup_epochs,
-                             "custom_weight_init": args.custom_weight_init}
+        experiment_config = {'epochs': args.epochs,
+                             'effective_batch_size': args.per_gpu_batch_size * accelerator.num_processes,
+                             'learning_rate': args.learning_rate,
+                             'warmup_epochs': args.warmup_epochs,
+                             'custom_weight_init': args.custom_weight_init}
         accelerator.init_trackers(args.experiment_name, config=experiment_config)
 
     transforms_train = transforms_training(img_wh=args.img_size)
@@ -252,22 +199,14 @@ def main():
 
     model = ConvResidualVQVAE_ResNet50Backbone(args.in_channels)
 
-    ema_model = None
-    if args.use_lora:
-        statedict = load_file(os.path.join(experiment_path, args.base_weights_no_lora))
-        with accelerator.main_process_first():
-            model.load_state_dict(statedict)
-        lora_config = LoRAConfig(**{k: v for k, v in args.__dict__.items() if 'lora_' in k})
-        model = LoRAModel(model, config=lora_config)
-    else:
-        if args.custom_weight_init:
-            model.apply(model.init_weights)
-        ema_model = ConvResidualVQVAE_ResNet50Backbone(args.in_channels)
-        with accelerator.main_process_first():
-            ema_model.load_state_dict(model.state_dict())
-            for p in ema_model.parameters():
-                p.requires_grad = False
-        ema_model = ema_model.to(accelerator.device)
+    if args.custom_weight_init:
+        model.apply(model.init_weights)
+    ema_model = ConvResidualVQVAE_ResNet50Backbone(args.in_channels)
+    with accelerator.main_process_first():
+        ema_model.load_state_dict(model.state_dict())
+        for p in ema_model.parameters():
+            p.requires_grad = False
+    ema_model = ema_model.to(accelerator.device)
 
     model = model.to(accelerator.device)
 
@@ -388,15 +327,12 @@ def main():
                 accum_train_loss = 0
 
                 pbar.update(1)
-                # break
         pbar.close()
 
 
         usage_ratios = []
         perplexities = []
         model.eval()
-        # accelerator.print('eval momo')
-        counter = 0
         for data, labels in testloader:
             data = data.to(accelerator.device)
             with torch.no_grad():
@@ -405,7 +341,6 @@ def main():
             loss = reconstruction_loss + codebook_loss + args.commitment_loss_beta * commitment_loss
             loss = loss.detach()
             gathered = accelerator.gather_for_metrics(loss)
-            # accelerator.print('wessa', gathered)
             test_losses.append(torch.mean(gathered).item())
 
             codebooks_usage_ratios = codebooks_usage_ratios.detach().unsqueeze(0)
@@ -414,15 +349,12 @@ def main():
             gathered_codebooks_perplexities = accelerator.gather_for_metrics(codebooks_perplexities)
             if gathered_codebooks_usage_ratio.ndim == 1:
                 gathered_codebooks_usage_ratio = gathered_codebooks_usage_ratio.unsqueeze(0)
-            # print(gathered_codebooks_usage_ratio)
             if gathered_codebooks_perplexities.ndim == 1:
                 gathered_codebooks_perplexities = gathered_codebooks_perplexities.unsqueeze(0)
             gathered_codebooks_perplexities = torch.mean(gathered_codebooks_perplexities, dim=0).tolist()
             gathered_codebooks_usage_ratio = torch.mean(gathered_codebooks_usage_ratio, dim=0).tolist()
             usage_ratios.append(gathered_codebooks_usage_ratio)
             perplexities.append(gathered_codebooks_perplexities)
-            # counter += 1
-            # if counter > 2: break
 
 
         epoch_train_loss = np.mean(train_losses).item()
@@ -436,9 +368,9 @@ def main():
         accelerator.print(f'Codebooks perplexity: {epoch_perplexity}')
 
         if args.log_wandb:
-            accelerator.log({"training_loss": epoch_train_loss,
-                             "testing_loss": epoch_test_loss,
-                             "lr": scheduler.get_last_lr()[0],
+            accelerator.log({'training_loss': epoch_train_loss,
+                             'testing_loss': epoch_test_loss,
+                             'lr': scheduler.get_last_lr()[0],
                              'codebooks_usage_ratio_min': min(epoch_usage_ratio),
                              'codebooks_perplexity_min': min(epoch_perplexity)},
                             step=epoch)

@@ -1,17 +1,10 @@
 #!/bin/bash
 
-accelerate launch train2.py \
+accelerate launch train.py \
     --experiment_name 'Conv_ResidualVQVAE_ResNet50Backbone' \
     --working_directory "work_dir" \
-    --path_to_data 'essa' \
+    --path_to_data 'data' \
     --checkpoint_dir 'checkpoints' \
-    --lora_rank 4 \
-    --lora_alpha 8 \
-    --lora_use_rslora \
-    --lora_dropout 0.1 \
-    --lora_bias 'lora_only' \
-    --lora_target_modules 'conv1,conv2,conv3' \
-    --lora_exclude_modules 'embedding,upsample,downsample,conv_transpose,conv0' \
     --max_grad_norm 1.0 \
     --per_gpu_batch_size 8 \
     --gradient_accumulation_steps 4 \
@@ -29,12 +22,9 @@ accelerate launch train2.py \
     --img_size 224 \
     --in_channels 3 \
     --num_workers 5 \
-    --base_weights_no_lora 'base_weights' \
     --custom_weight_init \
     --perceptual_loss_lambda 1e-3 \
-    --use_perceptual_loss
-#    --resume_from_checkpoint 'checkpoint_0'
-#    --log_wandb
+    --use_perceptual_loss \
+    --log_wandb
+#    --resume_from_checkpoint 'checkpoint_8'
 
-#    --use_lora
-#    --merged_weights_from_lora 'lora_merged_weights/reconstruct.safetensors'

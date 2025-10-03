@@ -3,6 +3,12 @@ import torch.nn as nn
 
 
 class VGG19(nn.Module):
+    """
+    Implementation of the VGG19 architecture with feature loss calculation.
+
+    :param in_channels: Number of input channels for the first convolutional layer.
+    :type in_channels: int
+    """
     def __init__(self, in_channels=3):
         super().__init__()
         self.n_convs = 16
@@ -33,10 +39,26 @@ class VGG19(nn.Module):
         self.relu = nn.ReLU()
 
     def calculate_feature_loss(self, x):
+        """
+        Calculates the feature loss between the reconstruction and source.
+
+        :param x: Input tensor concatenated along dimension 0 (reconstruction and source).
+        :type x: torch.Tensor
+        :return: Mean squared error loss between reconstruction and source.
+        :rtype: torch.Tensor
+        """
         reconstruction, source = x.chunk(2, dim=0)
         return torch.mean((reconstruction - source) ** 2)
 
     def forward(self, x):
+        """
+        Forward pass through the VGG19 model. Calculates the feature loss at each layer.
+
+        :param x: Input tensor concatenated along dimension 0 (reconstruction and source).
+        :type x: torch.Tensor
+        :return: Average feature loss across all convolutional layers.
+        :rtype: torch.Tensor
+        """
         # x is concatenated at dim 0 reconstruction from resvqvae and source
         x = self.conv1(x)
         loss = self.calculate_feature_loss(x)
